@@ -1,0 +1,113 @@
+import tempfile
+import os
+import pikepdf
+import tabula
+import pandas as pd
+
+# Function to get the path of the PDF
+def get_pdf_path():
+    return input("Enter the path to the PDF file: ")
+
+# Function to get the password if required
+def get_pdf_password():
+    return input("Enter the PDF password (leave blank if none): ")
+
+# Function to decrypt the PDF if it is password-protected
+def decrypt_pdf(pdf_path, password):
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_pdf:
+        temp_pdf_path = temp_pdf.name
+        try:
+            if password:
+                # Open and decrypt the PDF
+                with pikepdf.open(pdf_path, password=password) as pdf:
+                    pdf.save(temp_pdf_path)  # Save the decrypted PDF to a temporary file
+            else:
+                temp_pdf_path = pdf_path  # If no password, use the original PDF
+
+            return temp_pdf_path
+        except pikepdf.PasswordError:
+            print("Incorrect password. Please check your password and try again.")
+            return None
+
+# Function to split concatenated date strings and clean the table
+def split_concatenated_dates(df):
+    for index, row in df.iterrows():
+        # Assuming the 'Date' column contains concatenated date strings, split by the delimiter '\r'
+        if pd.notna(row['Date']) and '\r' in row['Date']:
+            # Split the dates by '\r' and create a list of dates
+            split_dates = row['Date'].split('\r')
+            
+            # Expand the row for each split date
+            expanded_rows = pd.DataFrame([row] * len(split_dates))  
+            expanded_rows['Date'] = split_dates 
+            
+            # Append the expanded rows to a list
+            if 'expanded_df' in locals():
+                expanded_df = pd.concat([expanded_df, expanded_rows], ignore_index=True)
+            else:
+                expanded_df = expanded_rows
+    
+    # Return the expanded DataFrame if it exists, otherwise return the original DataFrame
+    return expanded_df if 'expanded_df' in locals() else df
+
+# Main function to extract and process tables
+def process_pdf_tables():
+    # Get the PDF path and password from the user
+    pdf_path = get_pdf_path()
+    password = get_pdf_password()
+
+    # Decrypt the PDF if necessary
+    decrypted_pdf_path = decrypt_pdf(pdf_path, password)
+    
+    if decrypted_pdf_path:
+        # Extract all tables from the decrypted PDF using Tabula
+        tables = tabula.read_pdf(decrypted_pdf_path, pages='all', multiple_tables=True)
+
+        # Define the keywords for filtering the tables
+        keywords = ["Date", "Transaction", "Amount"]
+
+        # Initialize an empty list to store the required tables
+        filtered_tables = []
+
+        # Filter and process the tables
+        for table in tables:
+            if isinstance(table, pd.DataFrame):
+                # Check if all required keywords are in the column headers
+                if all(any(keyword in str(col) for col in table.columns) for keyword in keywords):
+                    # Drop NaN values in the table
+                    table = table.dropna()
+
+                    # Rename the last two columns to "Amt" and "Type"
+                    last_column_amt = table.columns[-2]
+                    last_column_type = table.columns[-1]
+                    table = table.rename(columns={last_column_amt: "Amt", last_column_type: "Type"})
+
+                    # Split concatenated dates
+                    table = split_concatenated_dates(table)
+
+                    # Append the filtered table to the list
+                    filtered_tables.append(table)
+
+        # Concatenate all filtered tables into a single DataFrame
+        if filtered_tables:
+            combined_df = pd.concat(filtered_tables, ignore_index=True)
+            return combined_df
+        else:
+            print("No tables with the required keywords were found.")
+            return None
+
+        # Clean up temporary decrypted PDF file
+        if decrypted_pdf_path != pdf_path and os.path.exists(decrypted_pdf_path):
+            os.remove(decrypted_pdf_path)
+
+# Run the function to process the PDF tables and get the concatenated DataFrame
+result_df = process_pdf_tables()
+
+# Print or use the final DataFrame if it exists
+#if result_df is not None:
+#    print(result_df.to_string())  # Display the final DataFrame in the console
+#else:
+#    print("No valid data extracted.")
+#
+#for output:
+#result_df.head(15)
